@@ -1,0 +1,730 @@
+--
+-- File generated with SQLiteStudio v3.3.3 on Thu Jun 23 18:39:02 2022
+--
+-- Text encoding used: System
+--
+PRAGMA foreign_keys = off;
+BEGIN TRANSACTION;
+
+-- Table: netflix_shows
+CREATE TABLE netflix_shows (
+    show_id,
+    type,
+    title,
+    director,
+    [cast],
+    country,
+    date_added,
+    release_year,
+    rating,
+    duration,
+    listed_in,
+    description
+);
+
+
+-- Table: netflix_top10
+CREATE TABLE netflix_top10 (
+    week,
+    category,
+    weekly_rank,
+    show_title,
+    season_title,
+    weekly_hours_viewed,
+    cumulative_weeks_in_top_10
+);
+
+
+-- Table: spotify_top200
+CREATE TABLE spotify_top200 (
+    Position,
+    [Track Name],
+    Artist,
+    Streams,
+    URL,
+    Date,
+    Region
+);
+
+
+-- Table: streaming_service_metadata
+CREATE TABLE streaming_service_metadata (
+    Service,
+    Supporting_Company_Companies,
+    Regional_Availability,
+    [Website-Based],
+    Windows_Application,
+    Mac_Application,
+    Linux_Application,
+    Ios_Application,
+    Android_Application,
+    Console_Application,
+    Tv_Set_Application,
+    Set_Top_Box_Application,
+    Free
+);
+
+
+-- Table: twitch_stream_data
+CREATE TABLE twitch_stream_data (
+    Name,
+    TimestampUTC,
+    CurrentGameID,
+    StreamTitle,
+    ViewerCount,
+    StarttimeUTC
+);
+
+
+-- Table: youtube_trending
+CREATE TABLE youtube_trending (
+    video_id,
+    trending_date,
+    title,
+    channel_title,
+    category_id,
+    publish_time,
+    tags,
+    views,
+    likes,
+    dislikes,
+    comment_count,
+    thumbnail_link,
+    comments_disabled,
+    ratings_disabled,
+    video_error_or_removed,
+    description
+);
+
+
+-- View: netflix_distinct_production_countries
+CREATE VIEW netflix_distinct_production_countries AS
+WITH split (
+        word,
+        STR
+    )
+    AS (-- This CTE recursively goes through the `country` column that lists
+        /* the countries that lists the country/countries where the movie was produced */SELECT '',
+               country || ','
+          FROM netflix_shows
+        UNION ALL
+        SELECT SUBSTR(STR, 0, INSTR(STR, ',') ),
+               SUBSTR(STR, INSTR(STR, ',') + 1) 
+          FROM SPLIT
+         WHERE STR != ''
+    )
+    SELECT DISTINCT word AS country
+      FROM SPLIT
+     WHERE word != ''
+     ORDER BY word;-- and creates/splits a record for each country found in a single string.-- e.g. {1:'United States, Mexico'} -> {1: 'United States', 2: 'Mexico'}-- (see data description here: https://www.kaggle.com/datasets/shivamb/netflix-shows)
+
+
+-- View: netflix_num_content_types
+CREATE VIEW netflix_num_content_types AS
+    SELECT type AS content_type,
+           COUNT(type) AS COUNT
+      FROM netflix_shows
+     GROUP BY type;
+
+
+-- View: netflix_num_distinct_production_locations
+CREATE VIEW netflix_num_distinct_production_locations AS
+WITH split (
+        word,
+        STR
+    )
+    AS (-- This CTE recursively goes through the `country` column that lists
+        /* the country/countries where the movie was produced */SELECT '',
+               country || ','
+          FROM netflix_shows
+        UNION ALL
+        SELECT SUBSTR(STR, 0, INSTR(STR, ',') ),
+               SUBSTR(STR, INSTR(STR, ',') + 1) 
+          FROM SPLIT
+         WHERE STR != ''
+    )
+    SELECT word AS country,
+           COUNT(word) AS COUNT,
+           1.0 * COUNT( * ) / (
+                                  SELECT COUNT( * ) 
+                                    FROM SPLIT
+                              )
+           AS percent_total
+      FROM SPLIT
+     WHERE word != ''
+     GROUP BY word
+     ORDER BY COUNT(word) DESC;-- and creates/splits a record for each country found in a single string.-- e.g. {1:'United States', Mexico'} -> {1: 'United States', 2: 'Mexico'}-- (see data description here: https://www.kaggle.com/datasets/shivamb/netflix-shows)
+
+
+-- View: netflix_num_rating_groups
+CREATE VIEW netflix_num_rating_groups AS
+WITH ratings AS (
+        SELECT DISTINCT rating,
+                        CASE WHEN rating IN ('G', 'PG', 'TV-G', 'TV-PG', 'TV-Y', 'TV-Y7', 'TV-Y7-FV') THEN 'Children' WHEN rating IN ('PG-13', 'TV-14') THEN 'Teenager' WHEN rating IN ('NC-17', 'R', 'TV-MA') THEN 'Adult' WHEN rating IN ('NR', 'UR', '') THEN 'No rating' ELSE NULL END AS audience_type
+          FROM netflix_shows
+    )
+    SELECT r.audience_type,
+           COUNT(r.audience_type) AS COUNT
+      FROM netflix_shows n
+           LEFT JOIN
+           ratings r ON n.rating = r.rating
+     WHERE r.rating NOT IN ('66 min', '74 min', '84 min')-- removes unknown ratings 
+     GROUP BY r.audience_type
+     ORDER BY COUNT(r.audience_type) DESC;
+
+
+-- View: netflix_num_title_top_10_by_age
+CREATE VIEW netflix_num_title_top_10_by_age AS
+WITH top10_seachable_titles AS (
+        SELECT t10.show_title,
+               t10.season_title,
+               t10.week,
+               t10.weekly_rank,
+               t10.weekly_hours_viewed,
+               t10.cumulative_weeks_in_top_10,
+               n.title,
+               n.date_added,
+               n.release_year,
+               n.type
+          FROM netflix_top10 t10
+               LEFT JOIN
+               netflix_shows n ON LOWER(t10.show_title) = LOWER(n.title) 
+         WHERE title NOT NULL
+    ),
+    top10_distinct_searchable_movies AS (
+        SELECT DISTINCT *,
+                        CAST (SUBSTR(date_added, -4, 4) AS INT) - release_year AS content_age
+          FROM top10_seachable_titles
+         WHERE type = 'Movie'
+         GROUP BY show_title
+         ORDER BY show_title
+    ),
+    final AS (
+        SELECT release_year,
+               date_added,
+               CASE WHEN content_age = 0 THEN 'Less than 1 year' WHEN content_age >= 1 AND 
+                                                                      content_age <= 5 THEN '1-5 years' WHEN content_age >= 6 AND 
+                                                                                                             content_age <= 10 THEN '6-10 years' ELSE '10+ years' END AS content_age_bin
+          FROM top10_distinct_searchable_movies
+    )
+    SELECT content_age_bin,
+           COUNT(content_age_bin) AS num_titles_in_top_10
+      FROM final
+     GROUP BY content_age_bin
+     ORDER BY CASE content_age_bin WHEN 'Less than 1 year' THEN 1 WHEN '1-5 years' THEN 2 WHEN '6-10 years' THEN 3 WHEN '10+ years' THEN 4 END;
+
+
+-- View: netflix_num_titles_top10_yoy
+CREATE VIEW netflix_num_titles_top10_yoy AS
+WITH top10_searchable_titles AS (
+        SELECT t10.show_title,
+               t10.season_title,
+               t10.week,
+               t10.weekly_rank,
+               t10.weekly_hours_viewed,
+               t10.cumulative_weeks_in_top_10,
+               n.title,
+               n.date_added,
+               n.release_year,
+               n.type
+          FROM netflix_top10 t10
+               LEFT JOIN
+               netflix_shows n ON LOWER(t10.show_title) = LOWER(n.title) 
+         WHERE title NOT NULL
+    ),
+    top10_distinct_searchable_movies AS (
+        SELECT DISTINCT *
+          FROM top10_searchable_titles
+         WHERE type = 'Movie'
+         GROUP BY show_title
+         ORDER BY show_title
+    )
+    SELECT release_year,
+           COUNT(release_year) AS num_titles_in_top_10
+      FROM top10_distinct_searchable_movies
+     GROUP BY release_year;
+
+
+-- View: netflix_ratings
+CREATE VIEW netflix_ratings AS
+    SELECT DISTINCT rating,
+                    CASE WHEN rating IN ('G', 'PG', 'TV-G', 'TV-PG', 'TV-Y', 'TV-Y7', 'TV-Y7-FV') THEN 'Children' WHEN rating IN ('PG-13', 'TV-14') THEN 'Young Adult' WHEN rating IN ('NC-17', 'R', 'TV-MA') THEN 'Mature' WHEN rating IN ('NR', 'UR', '') THEN 'No rating' ELSE NULL END AS audience_type
+      FROM netflix_shows
+     ORDER BY audience_type;
+
+
+-- View: netflix_title_age
+CREATE VIEW netflix_title_age AS
+WITH age_of_titles AS (
+        SELECT/* year begins at index -4 */ CAST (SUBSTR(date_added, -4, 4) AS INT) - release_year AS age_of_title
+          FROM netflix_shows
+    )
+    SELECT *
+      FROM age_of_titles
+     WHERE age_of_title >= 0
+     ORDER BY age_of_title;
+
+
+-- View: netflix_title_age_yoy
+CREATE VIEW netflix_title_age_yoy AS
+WITH avg_title_age_yoy AS (
+        SELECT CAST (SUBSTR(date_added, -4, 4) AS INT) AS year_added,
+               AVG(CAST (SUBSTR(date_added, -4, 4) AS INT) - release_year) AS avg_years_to_add
+          FROM netflix_shows
+         GROUP BY CAST (SUBSTR(date_added, -4, 4) AS INT) 
+        HAVING date_added != ''
+    )
+    SELECT *,
+           100.0 * ( (1.0 * SUM(avg_years_to_add) / LAG(SUM(avg_years_to_add) ) OVER (ORDER BY year_added) ) - 1) AS relative_diff,
+           SUM(avg_years_to_add) - LAG(SUM(avg_years_to_add) ) OVER (ORDER BY year_added) AS abs_diff
+      FROM avg_title_age_yoy
+     GROUP BY year_added;
+
+
+-- View: netflix_titles_added_yoy
+CREATE VIEW netflix_titles_added_yoy AS
+WITH yoy_counts AS (
+        SELECT CAST (SUBSTR(date_added, -4, 4) AS INT/* year starts at -4 index */) AS year_added,
+               COUNT( * ) AS COUNT
+          FROM netflix_shows
+         WHERE SUBSTR(date_added, -4, 4) != ''
+         GROUP BY SUBSTR(date_added, -4, 4) 
+    )
+    SELECT *,
+           100.0 * ( (1.0 * SUM(COUNT) / LAG(SUM(COUNT) ) OVER (ORDER BY year_added) ) - 1) AS relative_diff,
+           SUM(COUNT) - LAG(SUM(COUNT) ) OVER (ORDER BY year_added) AS abs_difference
+      FROM yoy_counts
+     GROUP BY year_added;
+
+
+-- View: num_distinct_release_years
+CREATE VIEW num_distinct_release_years AS
+    SELECT release_year,
+           COUNT(release_year) AS COUNT,
+           1.0 * COUNT( * ) / (
+                                  SELECT COUNT( * ) 
+                                    FROM netflix_shows
+                              )
+           AS percent_total
+      FROM netflix_shows
+     GROUP BY release_year;
+
+
+-- View: twitch_active_streams_per_hour
+CREATE VIEW twitch_active_streams_per_hour AS
+WITH distinct_games AS (
+        SELECT DISTINCT CAST (CurrentGameID AS INT) AS CurrentGameId
+          FROM twitch_stream_data
+         WHERE CAST (CurrentGameID AS INT) NOT NULL
+         ORDER BY CAST (CurrentGameID AS INT) 
+    ),
+    streams_with_timestamps AS (
+        SELECT t.*,
+               DATE(TimestampUTC) AS date,
+               strftime('%Y-%m-%d %H:00:00', TimestampUTC) AS hour_timestamp,
+               strftime('%Y-%m-%d %H:%M:00', TimestampUTC) AS minute_timestamp
+          FROM twitch_stream_data t
+               JOIN
+               distinct_games g ON t.CurrentGameId = g.CurrentGameId
+         WHERE DATE(TimestampUTC) > '2020-09-24'
+         ORDER BY DATE(TimestampUTC) 
+    ),
+    distinct_streams_per_hour AS (
+        SELECT DISTINCT Name,
+                        hour_timestamp
+          FROM streams_with_timestamps
+    ),
+    num_active_streams_per_hour AS (
+        SELECT hour_timestamp,
+               COUNT( * ) AS num_active_streams
+          FROM distinct_streams_per_hour
+         GROUP BY hour_timestamp
+    )
+    SELECT *
+      FROM num_active_streams_per_hour;
+
+
+-- View: twitch_avg_games_per_day
+CREATE VIEW twitch_avg_games_per_day AS
+WITH distinct_games AS (
+        SELECT DISTINCT CAST (CurrentGameID AS INT) AS CurrentGameId
+          FROM twitch_stream_data
+         WHERE CAST (CurrentGameID AS INT) NOT NULL
+         ORDER BY CAST (CurrentGameID AS INT) 
+    ),
+    streams_with_timestamps AS (
+        SELECT DATE(TimestampUTC) AS date,
+               t.*
+          FROM twitch_stream_data t
+               JOIN
+               distinct_games g ON t.CurrentGameId = g.CurrentGameId
+         WHERE DATE(TimestampUTC) > '2020-09-24'
+         ORDER BY DATE(TimestampUTC) 
+    ),
+    distinct_games_with_timestamps AS (
+        SELECT DISTINCT date,
+                        CurrentGameId
+          FROM streams_with_timestamps
+    ),
+    count_distinct_games_per_day AS (
+        SELECT date,
+               COUNT(CurrentGameId) AS distinct_games_per_day
+          FROM distinct_games_with_timestamps
+         WHERE date < '2020-11-06'
+         GROUP BY date
+    )
+    SELECT AVG(distinct_games_per_day) 
+      FROM count_distinct_games_per_day;
+
+
+-- View: twitch_avg_num_active_streams_per_hour
+CREATE VIEW twitch_avg_num_active_streams_per_hour AS
+WITH distinct_games AS (
+        SELECT DISTINCT CAST (CurrentGameID AS INT) AS CurrentGameId
+          FROM twitch_stream_data
+         WHERE CAST (CurrentGameID AS INT) NOT NULL
+         ORDER BY CAST (CurrentGameID AS INT) 
+    ),
+    streams_with_timestamps AS (
+        SELECT t.*,
+               DATE(TimestampUTC) AS date,
+               strftime('%Y-%m-%d %H:00:00', TimestampUTC) AS hour_timestamp,
+               strftime('%Y-%m-%d %H:%M:00', TimestampUTC) AS minute_timestamp
+          FROM twitch_stream_data t
+               JOIN
+               distinct_games g ON t.CurrentGameId = g.CurrentGameId
+         WHERE DATE(TimestampUTC) > '2020-09-24'
+         ORDER BY DATE(TimestampUTC) 
+    ),
+    distinct_streams_per_hour AS (
+        SELECT DISTINCT Name,
+                        hour_timestamp
+          FROM streams_with_timestamps
+    ),
+    num_active_streams_per_hour AS (
+        SELECT hour_timestamp,
+               COUNT( * ) AS num_active_streams
+          FROM distinct_streams_per_hour
+         GROUP BY hour_timestamp
+    )
+    SELECT AVG(num_active_streams) 
+      FROM num_active_streams_per_hour;
+
+
+-- View: twitch_avg_num_active_streams_per_minute
+CREATE VIEW twitch_avg_num_active_streams_per_minute AS
+WITH distinct_games AS (
+        SELECT DISTINCT CAST (CurrentGameID AS INT) AS CurrentGameId
+          FROM twitch_stream_data
+         WHERE CAST (CurrentGameID AS INT) NOT NULL
+         ORDER BY CAST (CurrentGameID AS INT) 
+    ),
+    streams_with_timestamps AS (
+        SELECT t.*,
+               DATE(TimestampUTC) AS date,
+               strftime('%Y-%m-%d %H:00:00', TimestampUTC) AS hour_timestamp,
+               strftime('%Y-%m-%d %H:%M:00', TimestampUTC) AS minute_timestamp
+          FROM twitch_stream_data t
+               JOIN
+               distinct_games g ON t.CurrentGameId = g.CurrentGameId
+         WHERE DATE(TimestampUTC) > '2020-09-24'
+         ORDER BY DATE(TimestampUTC) 
+    ),
+    distinct_streams_per_minute AS (
+        SELECT DISTINCT Name,
+                        minute_timestamp
+          FROM streams_with_timestamps
+    ),
+    num_active_streams_per_minute AS (
+        SELECT minute_timestamp,
+               COUNT( * ) AS num_active_streams
+          FROM distinct_streams_per_minute
+         GROUP BY minute_timestamp
+    )
+    SELECT AVG(num_active_streams) 
+      FROM num_active_streams_per_minute;
+
+
+-- View: twitch_creator_avg_stream_duration
+CREATE VIEW twitch_creator_avg_stream_duration AS
+WITH distinct_games AS (
+        SELECT DISTINCT CAST (CurrentGameID AS INT) AS CurrentGameId
+          FROM twitch_stream_data
+         WHERE CAST (CurrentGameID AS INT) NOT NULL
+         ORDER BY CAST (CurrentGameID AS INT) 
+    ),
+    streams_with_timestamps AS (
+        SELECT t.*,
+               DATE(TimestampUTC) AS date,
+               strftime('%Y-%m-%d %H:00:00', TimestampUTC) AS hour_timestamp,
+               strftime('%Y-%m-%d %H:%M:00', TimestampUTC) AS minute_timestamp,
+               (JULIANDAY(TimestampUTC) - JULIANDAY(StarttimeUTC) ) * 24 AS hours_since_start
+          FROM twitch_stream_data t
+               JOIN
+               distinct_games g ON t.CurrentGameId = g.CurrentGameId
+         WHERE DATE(TimestampUTC) > '2020-09-24'
+         ORDER BY DATE(TimestampUTC) 
+    ),
+    streams_longer_than_5_min AS (
+        SELECT Name,
+               MAX(hours_since_start) AS stream_duration
+          FROM streams_with_timestamps
+         GROUP BY Name,
+                  StarttimeUTC
+        HAVING MAX(hours_since_start) NOT NULL AND 
+               MAX(hours_since_start) > 0.083
+         ORDER BY MAX(hours_since_start) 
+    ),
+    creator_avg_stream_duration AS (
+        SELECT Name,
+               AVG(stream_duration) AS avg_stream_duration
+          FROM streams_longer_than_5_min
+         GROUP BY Name
+         ORDER BY AVG(stream_duration) DESC
+    )
+    SELECT *
+      FROM creator_avg_stream_duration;
+
+
+-- View: twitch_creator_stream_duration
+CREATE VIEW twitch_creator_stream_duration AS
+WITH distinct_games AS (
+        SELECT DISTINCT CAST (CurrentGameID AS INT) AS CurrentGameId
+          FROM twitch_stream_data
+         WHERE CAST (CurrentGameID AS INT) NOT NULL
+         ORDER BY CAST (CurrentGameID AS INT) 
+    ),
+    streams_with_timestamps AS (
+        SELECT t.*,
+               DATE(TimestampUTC) AS date,
+               strftime('%Y-%m-%d %H:00:00', TimestampUTC) AS hour_timestamp,
+               strftime('%Y-%m-%d %H:%M:00', TimestampUTC) AS minute_timestamp,
+               (JULIANDAY(TimestampUTC) - JULIANDAY(StarttimeUTC) ) * 24 AS hours_since_start
+          FROM twitch_stream_data t
+               JOIN
+               distinct_games g ON t.CurrentGameId = g.CurrentGameId
+         WHERE DATE(TimestampUTC) > '2020-09-24'
+         ORDER BY DATE(TimestampUTC) 
+    ),
+    streams_longer_than_5_min AS (
+        SELECT Name,
+               MAX(hours_since_start) AS stream_duration
+          FROM streams_with_timestamps
+         GROUP BY Name,
+                  StarttimeUTC
+        HAVING MAX(hours_since_start) NOT NULL AND 
+               MAX(hours_since_start) > 0.083
+         ORDER BY MAX(hours_since_start) 
+    ),
+    creator_total_stream_duration AS (
+        SELECT Name,
+               SUM(stream_duration) AS total_stream_duration
+          FROM streams_longer_than_5_min
+         GROUP BY Name
+         ORDER BY SUM(stream_duration) DESC
+    )
+    SELECT *
+      FROM creator_total_stream_duration;
+
+
+-- View: twitch_distinct_games
+CREATE VIEW twitch_distinct_games AS
+WITH distinct_games AS (
+        SELECT DISTINCT CAST (CurrentGameID AS INT) AS CurrentGameId
+          FROM twitch_stream_data
+         WHERE CAST (CurrentGameID AS INT) NOT NULL
+         ORDER BY CAST (CurrentGameID AS INT) 
+    ),
+    streams_with_timestamps AS (
+        SELECT DATE(TimestampUTC) AS date,
+               t.*
+          FROM twitch_stream_data t
+               JOIN
+               distinct_games g ON t.CurrentGameId = g.CurrentGameId
+         WHERE DATE(TimestampUTC) > '2020-09-24'
+         ORDER BY DATE(TimestampUTC) 
+    ),
+    distinct_games_with_timestamps AS (
+        SELECT DISTINCT CurrentGameId
+          FROM streams_with_timestamps
+    )
+    SELECT *
+      FROM distinct_games_with_timestamps
+     ORDER BY CurrentGameId;
+
+
+-- View: twitch_total_stream_duration
+CREATE VIEW twitch_total_stream_duration AS
+WITH distinct_games AS (
+        SELECT DISTINCT CAST (CurrentGameID AS INT) AS CurrentGameId
+          FROM twitch_stream_data
+         WHERE CAST (CurrentGameID AS INT) NOT NULL
+         ORDER BY CAST (CurrentGameID AS INT) 
+    ),
+    streams_with_timestamps AS (
+        SELECT t.*,
+               DATE(TimestampUTC) AS date,
+               strftime('%Y-%m-%d %H:00:00', TimestampUTC) AS hour_timestamp,
+               strftime('%Y-%m-%d %H:%M:00', TimestampUTC) AS minute_timestamp,
+               (JULIANDAY(TimestampUTC) - JULIANDAY(StarttimeUTC) ) * 24 AS hours_since_start
+          FROM twitch_stream_data t
+               JOIN
+               distinct_games g ON t.CurrentGameId = g.CurrentGameId
+         WHERE DATE(TimestampUTC) > '2020-09-24'
+         ORDER BY DATE(TimestampUTC) 
+    ),
+    streams_longer_than_5_min AS (
+        SELECT Name,
+               MAX(hours_since_start) AS stream_duration
+          FROM streams_with_timestamps
+         GROUP BY Name,
+                  StarttimeUTC
+        HAVING MAX(hours_since_start) NOT NULL AND 
+               MAX(hours_since_start) > 0.083
+         ORDER BY MAX(hours_since_start) 
+    ),
+    creator_total_stream_duration AS (
+        SELECT Name,
+               SUM(stream_duration) AS total_stream_duration
+          FROM streams_longer_than_5_min
+         GROUP BY Name
+         ORDER BY SUM(stream_duration) DESC
+    )
+    SELECT SUM(total_stream_duration) 
+      FROM creator_total_stream_duration;
+
+
+-- View: twtitch_max_viewers_per_stream
+CREATE VIEW twtitch_max_viewers_per_stream AS
+WITH distinct_games AS (
+        SELECT DISTINCT CAST (CurrentGameID AS INT) AS CurrentGameId
+          FROM twitch_stream_data
+         WHERE CAST (CurrentGameID AS INT) NOT NULL
+         ORDER BY CAST (CurrentGameID AS INT) 
+    ),
+    streams_with_timestamps AS (
+        SELECT t.*,
+               DATE(TimestampUTC) AS date,
+               strftime('%Y-%m-%d %H:00:00', TimestampUTC) AS hour_timestamp,
+               strftime('%Y-%m-%d %H:%M:00', TimestampUTC) AS minute_timestamp
+          FROM twitch_stream_data t
+               JOIN
+               distinct_games g ON t.CurrentGameId = g.CurrentGameId
+         WHERE DATE(TimestampUTC) > '2020-09-24'
+         ORDER BY DATE(TimestampUTC) 
+    ),
+    max_view_count_per_stream AS (
+        SELECT Name,
+               StarttimeUTC,
+               MAX(CAST (ViewerCount AS INT) ) AS max_view_count
+          FROM streams_with_timestamps
+         GROUP BY Name,
+                  StarttimeUTC
+    )
+    SELECT *
+      FROM max_view_count_per_stream
+     ORDER BY max_view_count DESC;
+
+
+-- View: youtube_likes_by_trending_category
+CREATE VIEW youtube_likes_by_trending_category AS
+WITH video_like_dislike_rates AS (
+        SELECT video_id,
+               ROUND(likes * 100.0 / (likes + dislikes), 1) AS like_rate,
+               ROUND(dislikes * 100.0 / (likes + dislikes), 1) AS dislike_rate
+          FROM youtube_trending
+         ORDER BY video_id
+    ),
+    avg_like_rates AS (
+        SELECT video_id,
+               AVG(like_rate) AS avg_like_rate
+          FROM video_like_dislike_rates
+         GROUP BY video_id
+    ),
+    final AS (
+        SELECT DISTINCT r.*,
+                        yt.category_id
+          FROM avg_like_rates r
+               JOIN
+               youtube_trending yt ON r.video_id = yt.video_id
+         WHERE r.avg_like_rate NOT NULL
+    )
+    SELECT category_id,
+           AVG(avg_like_rate) AS category_avg_like_rate
+      FROM final
+     GROUP BY category_id
+     ORDER BY category_avg_like_rate;
+
+
+-- View: youtube_top_trending_categories
+CREATE VIEW youtube_top_trending_categories AS
+WITH distinct_trending_videos AS (
+        SELECT DISTINCT video_id
+          FROM youtube_trending
+    ),
+    final AS (
+        SELECT DISTINCT v.*,
+                        yt.category_id
+          FROM distinct_trending_videos v
+               JOIN
+               youtube_trending yt ON v.video_id = yt.video_id
+         ORDER BY video_id
+    )
+    SELECT category_id,
+           COUNT(category_id) AS COUNT
+      FROM final
+     GROUP BY category_id
+     ORDER BY COUNT(category_id);
+
+
+-- View: youtube_trending_videos_by_video_age
+CREATE VIEW youtube_trending_videos_by_video_age AS
+WITH clean_dates AS (
+        SELECT video_id,
+               trending_date,
+               '20' || SUBSTR(trending_date, 1, 2) AS trending_year,
+               SUBSTR(trending_date, -2, 2) AS trending_month,
+               SUBSTR(trending_date, 4, 2) AS trending_day,
+               DATE('20' || SUBSTR(trending_date, 1, 2) || '-' || SUBSTR(trending_date, -2, 2) || '-' || SUBSTR(trending_date, 4, 2) ) AS clean_trending_date,
+               publish_time,
+               DATE(publish_time) AS clean_publish_time
+          FROM youtube_trending
+    ),
+    time_to_trend AS (
+        SELECT *,
+               CAST ( (julianday(clean_trending_date) - julianday(clean_publish_time) ) AS INT) AS days_before_trending
+          FROM clean_dates
+         ORDER BY video_id
+    ),
+    shortest_time_to_trend AS (
+        SELECT video_id,
+               MIN(days_before_trending) AS days_before_trending
+          FROM time_to_trend
+         GROUP BY video_id
+    ),
+    final AS (
+        SELECT *,
+               CASE WHEN days_before_trending = 0 THEN '<1 day' WHEN days_before_trending >= 1 AND 
+                                                                     days_before_trending <= 2 THEN '1-2 days' WHEN days_before_trending >= 2 AND 
+                                                                                                                    days_before_trending <= 3 THEN '2-3 days' WHEN days_before_trending >= 4 AND 
+                                                                                                                                                                   days_before_trending <= 6 THEN '4-6 days' WHEN days_before_trending >= 7 AND 
+                                                                                                                                                                                                                  days_before_trending <= 30 THEN '7-30 days' WHEN days_before_trending >= 31 AND 
+                                                                                                                                                                                                                                                                   days_before_trending <= 180 THEN '1-6 months' WHEN days_before_trending >= 181 AND 
+                                                                                                                                                                                                                                                                                                                      days_before_trending <= 360 THEN '6 months - 1 year' ELSE '>1 year' END AS days_before_trending_bin
+          FROM shortest_time_to_trend
+         ORDER BY days_before_trending DESC
+    )
+    SELECT days_before_trending_bin AS days_to_trend,
+           COUNT( * ) AS num_trending_videos,
+           1.0 * COUNT( * ) / (
+                                  SELECT COUNT( * ) 
+                                    FROM final
+                              )
+           AS percent_total
+      FROM final
+     GROUP BY days_before_trending_bin
+     ORDER BY CASE days_before_trending_bin WHEN '<1 day' THEN 1 WHEN '1-2 days' THEN 2 WHEN '2-3 days' THEN 3 WHEN '4-6 days' THEN 4 WHEN '7-30 days' THEN 5 WHEN '1-6 months' THEN 6 WHEN '6 months - 1 year' THEN 7 WHEN '>1 year' THEN 8 END;
+
+
+COMMIT TRANSACTION;
+PRAGMA foreign_keys = on;
